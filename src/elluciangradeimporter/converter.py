@@ -46,7 +46,7 @@ def converter(data, grade_col: str, id_col: str, id_component: str, reason = "OE
     df_final = df_init.with_columns(
         pl.lit(id_component).alias(basic_cols["comp"])
     )
-    df_final = df_init.with_columns(
+    df_final = df_final.with_columns(
         pl.lit(reason).alias(basic_cols["reas"])
     )
     df_final = df_final.with_columns(
