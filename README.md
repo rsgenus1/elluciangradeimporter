@@ -1,4 +1,4 @@
-# Ellucian Grade Importer
+**App en vivo:** <https://elluciangradeimporter.streamlit.app/>
 
 Herramienta que convierte un Excel con notas de estudiantes en un archivo
 compatible con los requisitos de importación de la plataforma **Banner de
@@ -30,6 +30,6 @@ Requiere Python 3.10+ y [uv](https://docs.astral.sh/uv/) para la gestión de
 dependencias.
 
 ```bash
-git clone https://github.com/<tu-usuario>/elluciangradeimporter.git
+git clone https://github.com/rsgenus1/elluciangradeimporter.git
 cd elluciangradeimporter
 uv sync
