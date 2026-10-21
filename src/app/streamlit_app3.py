@@ -1,9 +1,34 @@
+import io
+
+import polars as pl
 import streamlit as st
+
 from elluciangradeimporter.converter import (
     get_cols, converter, df_to_excel_bytes, get_idc,
 )
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+# Alias compatible: pl.String en versiones recientes, pl.Utf8 en todas
+STRING = getattr(pl, "String", pl.Utf8)
+
+
+def columnas_rut_posibles(df: pl.DataFrame) -> list[str]:
+    """Columnas cuyos valores no nulos ni vacíos, tras strip, miden todos 9 chars."""
+    resultado = []
+    for name in df.columns:
+        try:
+            serie = df[name].cast(STRING).str.strip_chars().drop_nulls()
+        except Exception:
+            continue
+        serie = serie.filter(serie != "")
+        if serie.len() == 0:
+            continue
+        longitudes = serie.str.len_chars()
+        if longitudes.min() == 9 and longitudes.max() == 9:
+            resultado.append(name)
+    return resultado
+
 
 st.title("Convertidor para Banner de Ellucian")
 st.markdown(
@@ -25,23 +50,32 @@ st.markdown(
 uploaded = st.file_uploader("Sube el Excel", type=["xlsx"])
 
 if uploaded is not None:
-    file_bytes = uploaded.getvalue()   # se extrae una sola vez
+    file_bytes = uploaded.getvalue()
 
-    # 1) Columnas (cacheado por contenido del archivo)
+    # 1) Columnas
     @st.cache_data(show_spinner="Leyendo columnas...")
     def _get_cols(data: bytes) -> list[str]:
         return get_cols(data)
 
     cols = _get_cols(file_bytes)
 
-    # 2) Intentar extraer idc_value del archivo principal
+    # 2) Detectar candidatas a RUT (9 chars). El _v invalida la caché al cambiar la lógica.
+    @st.cache_data(show_spinner="Detectando columna de RUT...")
+    def _detectar_rut(data: bytes, _v: int = 4) -> list[str]:
+        df_sample = pl.read_excel(io.BytesIO(data))
+        return columnas_rut_posibles(df_sample)
+
+    rut_candidatas = _detectar_rut(file_bytes)
+    rut_default = rut_candidatas[0] if rut_candidatas else cols[0]
+
+    # 3) Intentar extraer idc_value del archivo principal
     idc_value_default = ""
     try:
         idc_value_default = get_idc(file_bytes)
     except Exception:
-        pass  # silencioso: puede que el archivo no tenga la columna; se pedirá abajo
+        pass
 
-    # 3) Uploader opcional (fuera del form) para archivo que contenga el IDC
+    # 4) Uploader opcional (fuera del form) para archivo que contenga el IDC
     idc_file = st.file_uploader(
         "Opcional: sube el Excel que contiene el ID de la componente "
         "(solo si no se detectó automáticamente en el archivo principal)",
@@ -57,20 +91,29 @@ if uploaded is not None:
     elif idc_value_default:
         st.caption(f"ID de la componente detectado en el archivo principal: `{idc_value_default}`")
 
-    # 4) Parámetros
+    # 5) Parámetros
     with st.form("params"):
-        id_col        = st.selectbox("Columna con el ID del estudiante", cols)
-        grade_col     = st.selectbox("Columna con las notas", cols)
-        idc_value     = st.text_input(
+        id_col = st.selectbox(
+            "Columna con el ID del estudiante",
+            cols,
+            index=cols.index(rut_default),
+            help=(
+                f"Detectada automáticamente: `{rut_default}`"
+                if rut_candidatas
+                else "No se detectó automáticamente. Elige manualmente."
+            ),
+        )
+        grade_col    = st.selectbox("Columna con las notas", cols)
+        idc_value    = st.text_input(
             "Valor IDC",
             value=idc_value_default,
             help="Se detecta automáticamente desde el Excel. Puedes corregirlo aquí.",
         )
-        id_component  = st.text_input("Componente (ej. C01, C02...)", value="C01")
-        reason        = st.text_input("Razón de la nota (Dejar por defecto)", value="OE")
-        submitted     = st.form_submit_button("Procesar")
+        id_component = st.text_input("Componente (ej. C01, C02...)", value="C01")
+        reason       = st.text_input("Razón de la nota (Dejar por defecto)", value="OE")
+        submitted    = st.form_submit_button("Procesar")
 
-    # 5) Procesar
+    # 6) Procesar
     if submitted:
         try:
             df = converter(
@@ -96,7 +139,7 @@ if uploaded is not None:
             print(f"[ERROR] {type(e).__name__}: {e}", flush=True)
             st.error(f"Error procesando: {e}")
 
-    # 6) Mostrar y descargar (persisten entre reruns)
+    # 7) Mostrar y descargar
     if "result_df" in st.session_state:
         st.success(f"{st.session_state['result_df'].height} filas procesadas")
         st.dataframe(st.session_state["result_df"])
