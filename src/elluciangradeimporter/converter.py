@@ -49,6 +49,12 @@ def converter(data, grade_col: str, id_col: str, id_component: str, idc_value:st
           .str.to_uppercase()
           .alias(id_col)
     )
+    df_init = df_init.with_columns(
+    pl.col(grade_col)
+      .cast(pl.String)
+      .str.replace(".", ",", literal=True)
+      .alias(grade_col)
+    )#
     df_final = df_init.with_columns(
         pl.lit(id_component).alias(basic_cols["comp"])
     )
@@ -56,7 +62,10 @@ def converter(data, grade_col: str, id_col: str, id_component: str, idc_value:st
         pl.lit(reason).alias(basic_cols["reas"])
     )
     df_final = df_final.with_columns(
-        pl.col(grade_col).alias(basic_cols["punt"])
+        pl.col(grade_col)
+        .cast(pl.String)
+        .str.replace(".",",", literal=True)
+        .alias(basic_cols["punt"])
     )
     df_final = df_final.rename({grade_col: basic_cols["qual"]})
     df_final = df_final.rename({id_col: basic_cols["id"]})
@@ -83,3 +92,17 @@ def get_idc(file) -> str:
         columns = [basic_cols["idc"]]
     )
     return str(df[basic_cols["idc"]].unique().item())
+def columnas_rut_posibles(df: pl.DataFrame) -> list[str]:
+    """Columnas cuyos valores no nulos, al convertirse a texto, miden todos 9 chars."""
+    resultado = []
+    for name in df.columns:
+        try:
+            serie = df[name].cast(pl.String).drop_nulls()
+        except Exception:
+            continue
+        if serie.len() == 0:
+            continue
+        longitudes = serie.str.len_chars()
+        if longitudes.min() == 9 and longitudes.max() == 9:
+            resultado.append(name)
+    return resultado
