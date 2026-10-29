@@ -9,6 +9,11 @@ from elluciangradeimporter.converter import (
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
+# Contacto y enlaces de apoyo
+CONTACT_EMAIL = "ellucianimporter@proton.me"
+MP_CAFE_URL = "https://mpago.li/2BxMn6E"
+MP_MENSUAL_URL = "https://mpago.la/2RsGqp4"
+
 # Alias compatible: pl.String en versiones recientes, pl.Utf8 en todas
 STRING = getattr(pl, "String", pl.Utf8)
 
@@ -157,4 +162,42 @@ if uploaded is not None:
             mime=MIME_XLSX,
             on_click=_log_descarga,
             key="download_result",
+        )
+
+        # 8) Apoyo voluntario y contacto
+        st.divider()
+        with st.container(border=True):
+            st.markdown("##### ¿Te sirvió esta herramienta?")
+            st.caption(
+                "Es gratuita y la mantengo por mi cuenta. Si quieres retribuir de "
+                "forma **totalmente voluntaria**, puedes hacerlo aquí. "
+                "No es necesario, y la app seguirá funcionando igual."
+            )
+
+            col_cafe, col_mensual = st.columns(2)
+            with col_cafe:
+                st.link_button(
+                    "☕ Invítame un café (única vez)",
+                    MP_CAFE_URL,
+                    use_container_width=True,
+                )
+            with col_mensual:
+                st.link_button(
+                    "🔄 Apoyo mensual voluntario",
+                    MP_MENSUAL_URL,
+                    use_container_width=True,
+                )
+
+            st.caption(
+                "🔒 Serás redirigido a MercadoPago para completar el pago de forma segura."
+            )
+
+        st.markdown("")
+        st.caption(
+            f"🐛 ¿Encontraste un problema o tienes una sugerencia? "
+            f"Escríbeme a [{CONTACT_EMAIL}](mailto:{CONTACT_EMAIL}"
+            "?subject=%5BBUG%5D%20Reporte%20-%20Grade%20Importer"
+            "&body=Describe%20el%20problema%20o%20sugerencia%3A%0A%0A"
+            "Pasos%20para%20reproducirlo%20(si%20aplica)%3A%0A%0A"
+            "Archivo%20que%20estabas%20subiendo%20(si%20aplica)%3A%0A)"
         )
