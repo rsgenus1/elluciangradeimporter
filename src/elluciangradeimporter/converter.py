@@ -3,7 +3,7 @@ from io import BytesIO
 from datetime import date
 
 
-today_str = date.today().strftime("%m/%d/%Y")  
+today_str = date.today().strftime("%d/%m/%Y")  
 
 basic_cols = {
     "id" : "ID de alumno",
@@ -75,6 +75,10 @@ def converter(data, grade_col: str, id_col: str, id_component: str, idc_value:st
     df_final = df_final.with_columns(
         pl.lit(idc_value).alias(basic_cols["idc"])
     )
+    df_final = df_final.with_columns(
+    pl.lit("").cast(pl.String).alias("Comentario"),
+    pl.lit("").cast(pl.String).alias("Fecha de extensión"),
+)
     return df_final
 
 def df_to_excel_bytes(df: pl.DataFrame):
