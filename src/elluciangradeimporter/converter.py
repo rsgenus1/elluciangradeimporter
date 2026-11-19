@@ -110,3 +110,33 @@ def columnas_rut_posibles(df: pl.DataFrame) -> list[str]:
         if longitudes.min() == 9 and longitudes.max() == 9:
             resultado.append(name)
     return resultado
+
+
+def count_id_coincidences_diff(
+    df_grades: pl.DataFrame,
+    df_idc: pl.DataFrame,
+    id_col: str,
+    id_col_banner: str = "ID de alumno",
+) -> tuple[int, int]:
+    """
+    Cuenta cuántas filas de `df_grades[id_col]` aparecen en `df_idc[id_col_banner]`
+    (coincidencias) y cuántas no (diferencias).
+
+    - semi join: nunca duplica filas de df_grades aunque el ID esté repetido
+      en df_idc (p. ej. una fila por componente/evaluación en Banner).
+    - cast a Utf8 en ambos lados: si un archivo trae el ID como número y el
+      otro como texto, sin el cast el join no matchea nada silenciosamente.
+    """
+    # IDs únicos del IDC, renombrados al nombre de columna de df_grades
+    ids_idc = (
+        df_idc
+        .select(pl.col(id_col_banner).cast(pl.Utf8).unique().alias(id_col))
+    )
+
+    # semi join: devuelve solo las filas de df_grades cuyo ID está en ids_idc
+    coincidentes = df_grades.join(ids_idc, on=id_col, how="semi")
+
+    coincidencias = coincidentes.height
+    diferencias = df_grades.height - coincidencias
+    return (coincidencias, diferencias)
+

@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 venv/
 .python-version
+src/notebooks/
 
 # uv
 # (uv.lock SÍ se versiona, no lo ignores)

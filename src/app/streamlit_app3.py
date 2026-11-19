@@ -4,7 +4,7 @@ import polars as pl
 import streamlit as st
 
 from elluciangradeimporter.converter import (
-    get_cols, converter, df_to_excel_bytes, get_idc,
+    get_cols, converter, df_to_excel_bytes, get_idc, count_id_coincidences_diff
 )
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -33,6 +33,23 @@ def columnas_rut_posibles(df: pl.DataFrame) -> list[str]:
         if longitudes.min() == 9 and longitudes.max() == 9:
             resultado.append(name)
     return resultado
+
+
+@st.dialog("⚠️ Posible confusión de planillas")
+def dialog_idc_mismatch(coincidencias: int, diferencias: int) -> None:
+    st.markdown(
+        f"En la planilla de notas, **{diferencias}** estudiantes "
+        f"**no coinciden** con la planilla del IDC, y solo "
+        f"**{coincidencias}** coinciden."
+    )
+    st.markdown(
+        "Esto suele ocurrir cuando:\n"
+        "- Se subieron las **planillas equivocadas** (otro curso / otra sección).\n"
+        "- La columna seleccionada como **ID del estudiante** no es la correcta.\n\n"
+        "**Verifica los archivos y la selección antes de usar el resultado.**"
+    )
+    if st.button("Entendido", use_container_width=True):
+        st.rerun()
 
 
 st.title("Convertidor para Banner de Ellucian")
@@ -137,12 +154,38 @@ if uploaded is not None:
                 f"(componente={id_component}, idc={idc_value})",
                 flush=True,
             )
+
+            # Comparación de IDs contra la planilla del IDC (si fue subida)
+            if idc_file is not None:
+                try:
+                    df_grades_orig = pl.read_excel(io.BytesIO(file_bytes))
+                    df_idc = pl.read_excel(io.BytesIO(idc_file.getvalue()))
+                    coincidencias, diferencias = count_id_coincidences_diff(
+                        df_grades_orig, df_idc, id_col
+                    )
+                    print(
+                        f"[IDC CHECK] coincidencias={coincidencias} "
+                        f"diferencias={diferencias}",
+                        flush=True,
+                    )
+                    if diferencias > 2:
+                        st.session_state["idc_mismatch"] = (coincidencias, diferencias)
+                except Exception as e:
+                    # No bloqueamos la descarga si falla la validación
+                    print(f"[IDC CHECK ERROR] {type(e).__name__}: {e}", flush=True)
+
         except Exception as e:
             st.session_state.pop("result_df", None)
             st.session_state.pop("result_xlsx", None)
             st.session_state.pop("result_component", None)
             print(f"[ERROR] {type(e).__name__}: {e}", flush=True)
             st.error(f"Error procesando: {e}")
+
+    # Diálogo de advertencia si los IDs no coinciden mayoritariamente
+    # (se hace "pop" para que no reaparezca en reruns posteriores)
+    if "idc_mismatch" in st.session_state:
+        _coinc, _dif = st.session_state.pop("idc_mismatch")
+        dialog_idc_mismatch(_coinc, _dif)
 
     # 7) Mostrar y descargar
     if "result_df" in st.session_state:
