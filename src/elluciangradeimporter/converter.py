@@ -238,12 +238,12 @@ def converter(
           .alias(id_col)
     )
     df_init = df_init.with_columns(
-    pl.col(grade_col)
-        .round(1)
-      .cast(pl.String)
-      .str.replace(".", ",", literal=True)
-      .alias(grade_col)
-    )#
+        pl.col(grade_col)
+          .round(1, mode="half_away_from_zero")
+          .cast(pl.String)
+          .str.replace(".", ",", literal=True)
+          .alias(grade_col)
+    )
     df_final = df_init.with_columns(
         pl.lit(id_component).alias(basic_cols["comp"])
     )
