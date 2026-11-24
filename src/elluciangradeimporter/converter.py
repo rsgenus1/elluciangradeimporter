@@ -98,9 +98,10 @@ def detect_header_row(file, sheet_name: str | None = None, max_scan: int = HEADE
     combinada con el nombre del curso), filas vacías o datos de la asignatura,
     y recién más abajo empieza el encabezado real.
 
-    Primero se busca la fila más alta que parezca encabezado (varias celdas,
-    mayoría de texto) y que tenga debajo filas de ancho parecido (los datos).
-    Si ninguna cumple eso, se usa un puntaje como respaldo.
+    La heurística elige la fila con mejor puntaje: cantidad de celdas no
+    vacías, proporción de texto (los encabezados suelen ser texto y no números)
+    y si hay filas con datos debajo. En caso de empate se prefiere la fila más
+    alta.
     """
     rows = read_raw_rows(file, sheet_name, max_rows=max_scan)
     if not rows:
@@ -127,31 +128,13 @@ def detect_header_row(file, sheet_name: str | None = None, max_scan: int = HEADE
         below_avg = sum(below_counts) / len(below_counts) if below_counts else 0.0
         return n_values, text_ratio, below_avg
 
-    # Primera fila que parece encabezado y tiene datos de ancho similar debajo.
-    # Esto evita confundir el encabezado con una fila de datos (que suele tener
-    # la misma cantidad de celdas pero aparece más abajo).
-    for r in range(limit):
-        n_values, text_ratio, below_avg = stats(r)
-        if not (
-            n_values >= 2
-            and text_ratio >= 0.5
-            and below_avg > 0
-            and n_values >= 0.75 * below_avg
-            and below_avg >= 0.75 * n_values
-        ):
-            continue
-
-        # Si justo debajo hay una fila con mejor puntaje, es más probable que
-        # esta sea una fila de título y no el encabezado.
-        later = [_row_score(stats(j)) for j in range(r + 1, min(limit, r + 6))]
-        if not later or max(later) <= _row_score(stats(r)) + 0.5:
-            return r
-
-    # Respaldo: fila con más celdas, más texto y datos debajo.
+    # Se elige la fila con mejor puntaje. El desempate favorece la fila más
+    # alta, que es donde suele estar el encabezado (no una fila de datos).
     best_row = 0
     best_score = None
     for r in range(limit):
-        score = _row_score(stats(r))
+        n_values, text_ratio, below_avg = stats(r)
+        score = _row_score((n_values, text_ratio, below_avg))
         if score == float("-inf"):
             continue
         score -= r * 1e-6
@@ -320,6 +303,8 @@ def get_idc(file, sheet_name: str | None = None) -> str:
 def read_idc_frame(file) -> pl.DataFrame:
     """Lee la hoja de la planilla IDC que contiene la columna «ID de alumno»."""
     return read_sheet_with_column(file, basic_cols["id"])
+
+
 def columnas_rut_posibles(df: pl.DataFrame) -> list[str]:
     """Columnas cuyos valores no nulos, al convertirse a texto, miden todos 9 chars."""
     resultado = []

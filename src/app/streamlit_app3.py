@@ -29,21 +29,55 @@ MP_MENSUAL_URL = "https://mpago.la/2RsGqp4"
 STRING = getattr(pl, "String", pl.Utf8)
 
 
+# RUT chileno: exactamente 9 caracteres, 8 dígitos + dígito verificador (0-9 o K).
+ID_ESTUDIANTE_RE = re.compile(r"^\d{8}[\dKk]$")
+# Un número decimal (p. ej. "12345678.0") no es un RUT formateado.
+DECIMAL_RE = re.compile(r"^\d+\.\d+$")
+
+
+def _parece_id_estudiante(valor: str) -> bool:
+    """True si, tras normalizar el valor, tiene exactamente 9 caracteres de RUT.
+
+    Se quitan puntos, guiones y espacios (igual que hace ``converter`` al leer),
+    y luego se exigen 9 caracteres: 8 dígitos + dígito verificador (0-9 o K).
+    """
+    valor = valor.strip()
+    if DECIMAL_RE.match(valor):
+        return False
+    normalizado = re.sub(r"[.\-\s]", "", valor).upper()
+    return bool(ID_ESTUDIANTE_RE.match(normalizado))
+
+
 def columnas_rut_posibles(df: pl.DataFrame) -> list[str]:
-    """Columnas cuyos valores no nulos ni vacíos, tras strip, miden todos 9 chars."""
-    resultado = []
+    """Columnas cuyos VALORES parecen IDs de estudiante (no se usa el nombre).
+
+    Se evalúan los valores de cada columna: se considera candidata si al menos
+    el 80% de sus valores no vacíos, tras quitar puntos/guiones/espacios, tiene
+    exactamente 9 caracteres con forma de RUT. Esto tolera filas de
+    totales/promedios al final de la planilla. Las columnas se ordenan de mejor
+    a peor coincidencia.
+    """
+    MINIMO_VALORES = 1
+    PROPORCION_MINIMA = 0.8
+
+    candidatas = []
     for name in df.columns:
         try:
             serie = df[name].cast(STRING).str.strip_chars().drop_nulls()
         except Exception:
             continue
         serie = serie.filter(serie != "")
-        if serie.len() == 0:
+        total = serie.len()
+        if total < MINIMO_VALORES:
             continue
-        longitudes = serie.str.len_chars()
-        if longitudes.min() == 9 and longitudes.max() == 9:
-            resultado.append(name)
-    return resultado
+
+        validos = sum(1 for valor in serie.to_list() if _parece_id_estudiante(valor))
+        proporcion = validos / total
+        if proporcion >= PROPORCION_MINIMA:
+            candidatas.append((proporcion, validos, name))
+
+    candidatas.sort(key=lambda item: (-item[0], -item[1]))
+    return [name for _, _, name in candidatas]
 
 
 @st.dialog("⚠️ Posible confusión de planillas")
@@ -261,6 +295,10 @@ if uploaded is not None:
     # La clave cambia con el archivo IDC para que el campo se actualice al subirlo
     component_key = f"component_input_{file_id}_{idc_file.name if idc_file else ''}"
 
+    # Fuerza que los selectores de columnas se reinicien (y vuelvan a aplicar la
+    # detección de RUT) cuando cambia la hoja o la fila de encabezado.
+    selection_key = f"{file_id}_{sheet_name}_{header_row}"
+
     # 7) Parámetros
     with st.form("params"):
         id_col = st.selectbox(
@@ -272,8 +310,13 @@ if uploaded is not None:
                 if rut_candidatas
                 else "No se detectó automáticamente. Elige manualmente."
             ),
+            key=f"id_col_{selection_key}",
         )
-        grade_col    = st.selectbox("Columna con las notas", cols)
+        grade_col = st.selectbox(
+            "Columna con las notas",
+            cols,
+            key=f"grade_col_{selection_key}",
+        )
         idc_value    = st.text_input(
             "Valor IDC",
             value=idc_value_default,
