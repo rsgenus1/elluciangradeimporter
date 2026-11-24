@@ -3,6 +3,7 @@ from io import BytesIO
 
 import fastexcel
 import polars as pl
+import xlsxwriter
 
 today_str = date.today().strftime("%d/%m/%Y")  
 
@@ -269,9 +270,59 @@ def converter(
 )
     return df_final
 
-def df_to_excel_bytes(df: pl.DataFrame):
+def df_to_excel_bytes(df: pl.DataFrame) -> bytes:
+    """Genera el Excel de salida con un formato simple y legible."""
     buffer = BytesIO()
-    df.write_excel(buffer)
+
+    anchos = {
+        "Calificación": 100,
+        "ID de alumno": 110,
+        "Nombre de componente": 150,
+        "Razón de cambio de calificación": 240,
+        "Puntaje": 85,
+        "Fecha de envío": 110,
+        "ID de componente": 130,
+        "Comentario": 140,
+        "Fecha de extensión": 140,
+    }
+
+    workbook = xlsxwriter.Workbook(buffer, {"in_memory": True})
+    df.write_excel(
+        workbook,
+        worksheet="Importable",
+        header_format={
+            "bold": True,
+            "font_color": "#FFFFFF",
+            "bg_color": "#1F4E79",
+            "align": "center",
+            "valign": "vcenter",
+            "border": 1,
+        },
+        column_widths={
+            name: ancho for name, ancho in anchos.items() if name in df.columns
+        },
+        row_heights={0: 24},
+        freeze_panes=(1, 0),
+        autofilter=False,
+    )
+
+    # Bandas muy suaves en las filas de datos, coherentes con la cabecera azul.
+    if df.height > 0 and df.width > 0:
+        worksheet = workbook.get_worksheet_by_name("Importable")
+        banda = workbook.add_format({"bg_color": "#EAF1F8"})
+        worksheet.conditional_format(
+            1,
+            0,
+            df.height,
+            df.width - 1,
+            {
+                "type": "formula",
+                "criteria": "=MOD(ROW(),2)=0",
+                "format": banda,
+            },
+        )
+
+    workbook.close()
     return buffer.getvalue()
 
 
