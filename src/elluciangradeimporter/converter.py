@@ -51,6 +51,7 @@ def converter(data, grade_col: str, id_col: str, id_component: str, idc_value:st
     )
     df_init = df_init.with_columns(
     pl.col(grade_col)
+        .round(1)
       .cast(pl.String)
       .str.replace(".", ",", literal=True)
       .alias(grade_col)
@@ -65,9 +66,9 @@ def converter(data, grade_col: str, id_col: str, id_component: str, idc_value:st
         pl.col(grade_col)
         .cast(pl.String)
         .str.replace(".",",", literal=True)
-        .alias(basic_cols["punt"])
+        .alias(basic_cols["punt"]) #redondear a 1 dec
     )
-    df_final = df_final.rename({grade_col: basic_cols["qual"]})
+    df_final = df_final.rename({grade_col: basic_cols["qual"]}) # falta redondear a 1 dec
     df_final = df_final.rename({id_col: basic_cols["id"]})
     df_final = df_final.with_columns(
          pl.lit(today_str).alias("Fecha de envío")
