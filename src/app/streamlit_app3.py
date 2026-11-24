@@ -1,10 +1,19 @@
-import io
+import hashlib
 
 import polars as pl
 import streamlit as st
 
 from elluciangradeimporter.converter import (
-    get_cols, converter, df_to_excel_bytes, get_idc, count_id_coincidences_diff
+    converter,
+    count_id_coincidences_diff,
+    detect_header_row,
+    df_to_excel_bytes,
+    get_cols,
+    get_idc,
+    get_sheet_names,
+    read_idc_frame,
+    read_raw_rows,
+    read_sheet,
 )
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -62,42 +71,144 @@ st.markdown(
 
     **Cómo usarla:**
     1. Sube el Excel con las notas.
-    2. Selecciona la columna del ID del estudiante y la columna de notas.
-    3. Indica el componente (ej. `C01`, `C02`, ...).
-    4. Indica el ID de la componente, si no lo conoce, descarga la planilla desde Banner, y súbela, se detectará automáticamente.
-    5. Descarga el archivo generado e impórtalo en Banner.
+    2. Si el archivo tiene varias hojas, elige la que contiene las notas.
+    3. Verifica que la fila de nombres de columnas sea la correcta.
+    4. Selecciona la columna del ID del estudiante y la columna de notas.
+    5. Indica el componente (ej. `C01`, `C02`, ...).
+    6. Indica el ID de la componente, si no lo conoce, descarga la planilla desde Banner, y súbela, se detectará automáticamente.
+    7. Descarga el archivo generado e impórtalo en Banner.
     """
 )
+
+
+def _reset_result() -> None:
+    """Descarta un resultado previo cuando cambia la hoja o el encabezado."""
+    for key in ("result_df", "result_xlsx", "result_component", "idc_mismatch"):
+        st.session_state.pop(key, None)
+
+
+def _preview_row(row: tuple, max_cells: int = 7, max_chars: int = 22) -> str:
+    """Resumen corto de una fila para mostrarla en el selector de encabezado."""
+    partes = []
+    for value in row[:max_cells]:
+        text = "" if value is None else str(value).strip()
+        if text:
+            partes.append(text[:max_chars])
+    return " | ".join(partes) if partes else "(fila vacía)"
+
 
 uploaded = st.file_uploader("Sube el Excel", type=["xlsx", "xls"])
 
 if uploaded is not None:
     file_bytes = uploaded.getvalue()
+    # Identificador estable del contenido para reiniciar selectores al subir otro archivo
+    file_id = hashlib.sha1(file_bytes).hexdigest()[:12]
 
-    # 1) Columnas
+    # 1) Hojas (worksheets) del workbook
+    @st.cache_data(show_spinner="Leyendo hojas del archivo...")
+    def _get_sheets(data: bytes) -> list[str]:
+        return get_sheet_names(data)
+
+    try:
+        sheets = _get_sheets(file_bytes)
+    except Exception as e:
+        st.error(f"No se pudo leer el archivo: {e}")
+        _reset_result()
+        st.stop()
+
+    if not sheets:
+        st.error("El archivo no contiene hojas.")
+        _reset_result()
+        st.stop()
+
+    # Si hay más de una hoja, el usuario elige cuál contiene las notas
+    if len(sheets) > 1:
+        sheet_name = st.selectbox(
+            "El archivo tiene varias hojas. ¿Cuál contiene las notas?",
+            sheets,
+            on_change=_reset_result,
+            key=f"sheet_select_{file_id}",
+        )
+    else:
+        sheet_name = sheets[0]
+
+    # 2) Fila con los nombres de columnas: detectar y permitir corregir
+    @st.cache_data(show_spinner="Analizando filas de encabezado...")
+    def _get_raw_rows(data: bytes, sheet: str, _v: int = 1) -> list[tuple]:
+        return read_raw_rows(data, sheet)
+
+    @st.cache_data(show_spinner="Detectando fila de encabezado...")
+    def _detect_header(data: bytes, sheet: str, _v: int = 1) -> int:
+        return detect_header_row(data, sheet)
+
+    raw_rows = _get_raw_rows(file_bytes, sheet_name)
+    if not raw_rows:
+        st.warning("La hoja seleccionada está vacía.")
+        _reset_result()
+        st.stop()
+
+    detected_header = _detect_header(file_bytes, sheet_name)
+    detected_header = min(max(detected_header, 0), len(raw_rows) - 1)
+
+    def _header_label(index: int) -> str:
+        label = f"Fila {index + 1}: {_preview_row(raw_rows[index])}"
+        if index == detected_header:
+            label += "  ← detectada"
+        return label
+
+    header_row = st.selectbox(
+        "Fila que contiene los nombres de las columnas",
+        list(range(len(raw_rows))),
+        index=detected_header,
+        format_func=_header_label,
+        on_change=_reset_result,
+        help=(
+            "Se detectó automáticamente la fila "
+            f"{detected_header + 1}. Si no es correcta (por ejemplo, si hay un "
+            "título con celdas combinadas sobre el encabezado), elige aquí la "
+            "fila correcta."
+        ),
+        key=f"header_select_{file_id}_{sheet_name}",
+    )
+    st.caption(
+        f"Encabezado detectado automáticamente: fila {detected_header + 1}. "
+        "Puedes cambiarlo si no corresponde."
+    )
+
+    # 3) Columnas de la hoja/fila elegidas
     @st.cache_data(show_spinner="Leyendo columnas...")
-    def _get_cols(data: bytes) -> list[str]:
-        return get_cols(data)
+    def _get_cols(data: bytes, sheet: str, header: int, _v: int = 1) -> list[str]:
+        return get_cols(data, sheet_name=sheet, header_row=header)
 
-    cols = _get_cols(file_bytes)
+    cols = _get_cols(file_bytes, sheet_name, header_row)
+    if not cols:
+        st.error(
+            "No se encontraron columnas en la fila seleccionada. "
+            "Prueba con otra fila de encabezado."
+        )
+        _reset_result()
+        st.stop()
 
-    # 2) Detectar candidatas a RUT (9 chars). El _v invalida la caché al cambiar la lógica.
+    # 4) Detectar candidatas a RUT (9 chars). El _v invalida la caché al cambiar la lógica.
     @st.cache_data(show_spinner="Detectando columna de RUT...")
-    def _detectar_rut(data: bytes, _v: int = 4) -> list[str]:
-        df_sample = pl.read_excel(io.BytesIO(data))
+    def _detectar_rut(data: bytes, sheet: str, header: int, _v: int = 5) -> list[str]:
+        df_sample = read_sheet(data, sheet_name=sheet, header_row=header)
         return columnas_rut_posibles(df_sample)
 
-    rut_candidatas = _detectar_rut(file_bytes)
+    rut_candidatas = _detectar_rut(file_bytes, sheet_name, header_row)
     rut_default = rut_candidatas[0] if rut_candidatas else cols[0]
 
-    # 3) Intentar extraer idc_value del archivo principal
-    idc_value_default = ""
-    try:
-        idc_value_default = get_idc(file_bytes)
-    except Exception:
-        pass
+    # 5) Intentar extraer idc_value del archivo principal (en cualquier hoja)
+    @st.cache_data(show_spinner="Buscando ID de componente...")
+    def _get_idc(data: bytes, sheet: str, _v: int = 1) -> str:
+        try:
+            return get_idc(data, sheet_name=sheet)
+        except Exception:
+            return ""
 
-    # 4) Uploader opcional (fuera del form) para archivo que contenga el IDC
+    idc_value_default = _get_idc(file_bytes, sheet_name)
+
+    # 6) Uploader opcional (fuera del form) para archivo que contenga el IDC
     idc_file = st.file_uploader(
         "Opcional: sube el Excel que contiene el ID de la componente "
         "(solo si no se detectó automáticamente en el archivo principal)",
@@ -113,7 +224,7 @@ if uploaded is not None:
     elif idc_value_default:
         st.caption(f"ID de la componente detectado en el archivo principal: `{idc_value_default}`")
 
-    # 5) Parámetros
+    # 7) Parámetros
     with st.form("params"):
         id_col = st.selectbox(
             "Columna con el ID del estudiante",
@@ -135,7 +246,7 @@ if uploaded is not None:
         reason       = st.text_input("Razón de la nota (Dejar por defecto)", value="OE")
         submitted    = st.form_submit_button("Procesar")
 
-    # 6) Procesar
+    # 8) Procesar
     if submitted:
         try:
             df = converter(
@@ -145,6 +256,8 @@ if uploaded is not None:
                 idc_value=idc_value,
                 id_component=id_component,
                 reason=reason,
+                sheet_name=sheet_name,
+                header_row=header_row,
             )
             st.session_state["result_df"] = df
             st.session_state["result_xlsx"] = df_to_excel_bytes(df)
@@ -158,8 +271,10 @@ if uploaded is not None:
             # Comparación de IDs contra la planilla del IDC (si fue subida)
             if idc_file is not None:
                 try:
-                    df_grades_orig = pl.read_excel(io.BytesIO(file_bytes))
-                    df_idc = pl.read_excel(io.BytesIO(idc_file.getvalue()))
+                    df_grades_orig = read_sheet(
+                        file_bytes, sheet_name=sheet_name, header_row=header_row
+                    )
+                    df_idc = read_idc_frame(idc_file.getvalue())
                     coincidencias, diferencias = count_id_coincidences_diff(
                         df_grades_orig, df_idc, id_col
                     )
@@ -187,7 +302,7 @@ if uploaded is not None:
         _coinc, _dif = st.session_state.pop("idc_mismatch")
         dialog_idc_mismatch(_coinc, _dif)
 
-    # 7) Mostrar y descargar
+    # 9) Mostrar y descargar
     if "result_df" in st.session_state:
         st.success(f"{st.session_state['result_df'].height} filas procesadas")
         st.dataframe(st.session_state["result_df"])
@@ -207,7 +322,7 @@ if uploaded is not None:
             key="download_result",
         )
 
-        # 8) Apoyo voluntario y contacto
+        # 10) Apoyo voluntario y contacto
         st.divider()
         with st.container(border=True):
             st.markdown("##### ¿Te sirvió esta herramienta?")
