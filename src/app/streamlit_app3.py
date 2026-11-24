@@ -1,4 +1,6 @@
 import hashlib
+import re
+from pathlib import Path
 
 import polars as pl
 import streamlit as st
@@ -83,7 +85,13 @@ st.markdown(
 
 def _reset_result() -> None:
     """Descarta un resultado previo cuando cambia la hoja o el encabezado."""
-    for key in ("result_df", "result_xlsx", "result_component", "idc_mismatch"):
+    for key in (
+        "result_df",
+        "result_xlsx",
+        "result_component",
+        "result_filename",
+        "idc_mismatch",
+    ):
         st.session_state.pop(key, None)
 
 
@@ -95,6 +103,24 @@ def _preview_row(row: tuple, max_cells: int = 7, max_chars: int = 22) -> str:
         if text:
             partes.append(text[:max_chars])
     return " | ".join(partes) if partes else "(fila vacía)"
+
+
+# Archivos de Banner terminan en algo como "..._C01.xlsx" o "..._C01 (1).xlsx"
+COMPONENT_FROM_NAME_RE = re.compile(r"_(C\d{1,2})\s*(?:\(\d+\))?$", re.IGNORECASE)
+
+
+def _component_from_filename(name: str | None) -> str | None:
+    """Extrae el componente (C01, C02, ...) del nombre del archivo, si existe."""
+    if not name:
+        return None
+    match = COMPONENT_FROM_NAME_RE.search(Path(name).stem)
+    return match.group(1).upper() if match else None
+
+
+def _download_filename(idc_file, uploaded) -> str:
+    """Nombre de salida: el original (IDC si existe) + ' importable.xlsx'."""
+    base = idc_file.name if idc_file is not None else uploaded.name
+    return f"{Path(base).stem} importable.xlsx"
 
 
 uploaded = st.file_uploader("Sube el Excel", type=["xlsx", "xls"])
@@ -224,6 +250,17 @@ if uploaded is not None:
     elif idc_value_default:
         st.caption(f"ID de la componente detectado en el archivo principal: `{idc_value_default}`")
 
+    # Componente sugerido desde el nombre del archivo IDC (ej. ..._C01.xlsx)
+    detected_component = (
+        _component_from_filename(idc_file.name) if idc_file is not None else None
+    ) or _component_from_filename(uploaded.name)
+    component_default = detected_component or "C01"
+    if idc_file is not None and detected_component:
+        st.caption(f"Componente detectado en el nombre del archivo: `{detected_component}`")
+
+    # La clave cambia con el archivo IDC para que el campo se actualice al subirlo
+    component_key = f"component_input_{file_id}_{idc_file.name if idc_file else ''}"
+
     # 7) Parámetros
     with st.form("params"):
         id_col = st.selectbox(
@@ -242,7 +279,15 @@ if uploaded is not None:
             value=idc_value_default,
             help="Se detecta automáticamente desde el Excel. Puedes corregirlo aquí.",
         )
-        id_component = st.text_input("Componente (ej. C01, C02...)", value="C01")
+        id_component = st.text_input(
+            "Componente (ej. C01, C02...)",
+            value=component_default,
+            help=(
+                "Se completa automáticamente si el nombre del archivo termina "
+                "en _C01, _C02, etc. Puedes corregirlo aquí."
+            ),
+            key=component_key,
+        )
         reason       = st.text_input("Razón de la nota (Dejar por defecto)", value="OE")
         submitted    = st.form_submit_button("Procesar")
 
@@ -262,6 +307,7 @@ if uploaded is not None:
             st.session_state["result_df"] = df
             st.session_state["result_xlsx"] = df_to_excel_bytes(df)
             st.session_state["result_component"] = id_component
+            st.session_state["result_filename"] = _download_filename(idc_file, uploaded)
             print(
                 f"[PROCESS] {uploaded.name} -> {df.height} filas "
                 f"(componente={id_component}, idc={idc_value})",
@@ -309,14 +355,14 @@ if uploaded is not None:
 
         def _log_descarga():
             print(
-                f"[DOWNLOAD] {st.session_state['result_component']}.xlsx",
+                f"[DOWNLOAD] {st.session_state['result_filename']}",
                 flush=True,
             )
 
         st.download_button(
             label="Descargar Excel",
             data=st.session_state["result_xlsx"],
-            file_name=f"resultado_{st.session_state['result_component']}.xlsx",
+            file_name=st.session_state["result_filename"],
             mime=MIME_XLSX,
             on_click=_log_descarga,
             key="download_result",
