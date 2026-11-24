@@ -69,7 +69,7 @@ st.markdown(
     """
 )
 
-uploaded = st.file_uploader("Sube el Excel", type=["xlsx"])
+uploaded = st.file_uploader("Sube el Excel", type=["xlsx", "xls"])
 
 if uploaded is not None:
     file_bytes = uploaded.getvalue()
